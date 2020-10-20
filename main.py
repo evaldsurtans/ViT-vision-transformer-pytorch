@@ -7,15 +7,15 @@ import matplotlib.pyplot as plt
 plt.rcParams["figure.figsize"] = (20, 5)
 
 # normally pass hyper params through argparse
-BATCH_SIZE = 128
-HIDDEN_SIZE = 512
-PATCH_SIZE = 16
+BATCH_SIZE = 256
+HIDDEN_SIZE = 64
+PATCH_SIZE = 4
 MSA_HEADS = 8
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 EPOCHS = 100
 
-CHANNELS = 3
-IMAGE_SIZE = 32
+CHANNELS = 1
+IMAGE_SIZE = 28
 OUTPUT_CLASSES = 10
 DEVICE = 'cpu'
 
@@ -23,12 +23,12 @@ if torch.cuda.is_available():
     DEVICE = 'cuda'
     #torch.cuda.device_count()
 
-class DatasetCIFAR10(torch.utils.data.Dataset):
+class DatasetMNIST(torch.utils.data.Dataset):
 
     def __init__(self, is_train):
         super().__init__()
 
-        self.data = torchvision.datasets.cifar.CIFAR10(
+        self.data = torchvision.datasets.mnist.MNIST(
             root='./tmp',
             train=is_train,
             download=True
@@ -36,8 +36,12 @@ class DatasetCIFAR10(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         x, y_idx = self.data[index]
-        x = torch.FloatTensor(np.array(x)) # W, H, C
-        x = x.permute(2, 0, 1) # C, W, H
+        x = torch.FloatTensor(np.array(x)) # W, H
+        x = torch.unsqueeze(x, dim=0) # C, W, H
+
+        # for CIFAR10
+        #x = x.permute(2, 0, 1) # C, W, H
+
         y = torch.zeros((10, ))
         y[y_idx] = 1.0
         return x, y
@@ -47,12 +51,12 @@ class DatasetCIFAR10(torch.utils.data.Dataset):
 
 
 dataloader_train = torch.utils.data.DataLoader(
-    dataset=DatasetCIFAR10(is_train=True),
+    dataset=DatasetMNIST(is_train=True),
     batch_size=BATCH_SIZE,
     shuffle=True
 )
 dataloader_test = torch.utils.data.DataLoader(
-    dataset=DatasetCIFAR10(is_train=False),
+    dataset=DatasetMNIST(is_train=False),
     batch_size=BATCH_SIZE,
     shuffle=False
 )
@@ -84,7 +88,7 @@ class ModelVisionTransformer(torch.nn.Module):
             embedding_dim=HIDDEN_SIZE
         )
         self.encode_class = torch.nn.Parameter(
-            torch.rand((HIDDEN_SIZE,))
+            torch.normal(mean=0.0, std=1.0, size=(HIDDEN_SIZE,))
         )
 
         self.encode_project = torch.nn.Linear(
@@ -141,7 +145,7 @@ class ModelVisionTransformer(torch.nn.Module):
         )
 
     def forward(self, x):
-        # x = (B, 3, 32, 32)
+        # x = (B, CHANNELS, IMAGE_SIZE, IMAGE_SIZE)
 
         x_patches = torch.nn.functional.unfold(x, (PATCH_SIZE, PATCH_SIZE), dilation=1, padding=0, stride=(PATCH_SIZE, PATCH_SIZE))
 
@@ -167,7 +171,12 @@ class ModelVisionTransformer(torch.nn.Module):
         #### Transformer Layer 1
 
         z_1 = self.layer_norm_1.forward(z_0)
-        z_1_msa, z_1_attn = self.msa_1.forward(query=z_1, key=z_1, value=z_1)
+
+        z_1_msa, z_1_attn = self.msa_1.forward(
+            query=z_1,
+            key=z_1,
+            value=z_1
+        )
 
         z_1_msa_skip = z_1_msa + z_0
 
@@ -181,8 +190,12 @@ class ModelVisionTransformer(torch.nn.Module):
         #### Transformer Layer 2
 
         z_3 = self.layer_norm_3.forward(z_2_mlp_skip)
-        z_3_msa, z_3_attn = self.msa_3.forward(query=z_3, key=z_3, value=z_3)
 
+        z_3_msa, z_3_attn = self.msa_3.forward(
+            query=z_3,
+            key=z_3,
+            value=z_3
+        )
         z_3_msa_skip = z_3_msa + z_3
 
         z_4 = self.layer_norm_4.forward(z_3_msa_skip)
@@ -194,7 +207,9 @@ class ModelVisionTransformer(torch.nn.Module):
 
         z_5 = self.layer_norm_5.forward(z_4_mlp_skip)
 
-        z_5_class_token = z_5[:, 0] # drop all pixel encodings, care only about the class token
+        #z_5_class_token = z_5[:, 0] # drop all pixel encodings, care only about the class token
+
+        z_5_class_token = torch.mean(z_5, dim=1)
         y_prim = self.mlp_5_head.forward(z_5_class_token)
 
         y_prim_softmax = torch.nn.functional.softmax(y_prim, dim=1)
@@ -204,15 +219,14 @@ class ModelVisionTransformer(torch.nn.Module):
 
 model = ModelVisionTransformer()
 optimizer = torch.optim.Adam(
-    weight_decay=0.1,
     params=model.parameters(),
     lr=LEARNING_RATE
 )
 
 model = model.to(DEVICE)
 
-# dummy = torch.rand(size=(BATCH_SIZE, 3, 32, 32))
-# out_dummy = model.forward(dummy)
+dummy = torch.rand(size=(BATCH_SIZE, CHANNELS, IMAGE_SIZE, IMAGE_SIZE)).to(DEVICE)
+out_dummy = model.forward(dummy)
 
 print('starting training')
 
@@ -259,13 +273,13 @@ for epoch in range(1, EPOCHS):
         print(f"epoch: {epoch} mode: {mode} loss: {metrics[f'{mode}_losses'][-1]} acc: {metrics[f'{mode}_acc'][-1]}")
 
     plt.subplot(1, 2, 1)
-    plt.plot(metrics[f'train_losses'], 'r-', label='train_losses')
-    plt.plot(metrics[f'test_losses'], 'b-', label='test_losses')
+    plt.plot(metrics['train_losses'], 'r-', label='train_loss')
+    plt.plot(metrics['test_losses'], 'b-', label='test_loss')
     plt.legend()
 
     plt.subplot(1, 2, 2)
-    plt.plot(metrics[f'train_acc'], 'r-', label='train_acc')
-    plt.plot(metrics[f'test_acc'], 'b-', label='test_acc')
+    plt.plot(metrics['train_acc'], 'r-', label='train_acc')
+    plt.plot(metrics['test_acc'], 'b-', label='test_acc')
     plt.legend()
 
     plt.show()
