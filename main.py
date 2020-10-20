@@ -1,23 +1,24 @@
 import torch
 import torch.utils.data
 import torchvision
-import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn.functional
-from tqdm import tqdm
 import matplotlib.pyplot as plt
-plt.rcParams["figure.figsize"] = (20, 10)
+plt.rcParams["figure.figsize"] = (20, 5)
 
 # normally pass hyper params through argparse
-BATCH_SIZE = 64
-HIDDEN_SIZE = 96
-IMAGE_SIZE = 32
-PATCH_SIZE = 2
-MSA_HEADS = 4
-CHANNELS = 3
-OUTPUT_CLASSES = 10
+BATCH_SIZE = 128
+HIDDEN_SIZE = 512
+PATCH_SIZE = 16
+MSA_HEADS = 8
+LEARNING_RATE = 1e-4
+EPOCHS = 100
 
+CHANNELS = 3
+IMAGE_SIZE = 32
+OUTPUT_CLASSES = 10
 DEVICE = 'cpu'
+
 if torch.cuda.is_available():
     DEVICE = 'cuda'
     #torch.cuda.device_count()
@@ -202,7 +203,11 @@ class ModelVisionTransformer(torch.nn.Module):
 
 
 model = ModelVisionTransformer()
-optimizer = torch.optim.Adam(params=model.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(
+    weight_decay=0.1,
+    params=model.parameters(),
+    lr=LEARNING_RATE
+)
 
 model = model.to(DEVICE)
 
@@ -216,7 +221,7 @@ for mode in ['train', 'test']:
     metrics[f'{mode}_losses'] = []
     metrics[f'{mode}_acc'] = []
 
-for epoch in range(1, 10):
+for epoch in range(1, EPOCHS):
     for data_loader in [dataloader_train, dataloader_test]:
         losses = []
         accs = []
