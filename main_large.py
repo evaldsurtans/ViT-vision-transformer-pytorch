@@ -65,6 +65,22 @@ dataloader_test = torch.utils.data.DataLoader(
     shuffle=False
 )
 
+
+class PositionalEncoding(torch.nn.Module):
+
+    def __init__(self, num_embeddings, embedding_dim):
+        super(PositionalEncoding, self).__init__()
+
+        pe = torch.zeros(num_embeddings, embedding_dim)
+        position = torch.arange(0, num_embeddings, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, embedding_dim, 2).float() * (-np.log(10000.0) / embedding_dim))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, idxes):
+        return self.pe[idxes, :]
+
 class ModelClassic(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -95,7 +111,8 @@ class TransformerLayer(torch.nn.Module):
         self.msa_1 = torch.nn.MultiheadAttention(
             embed_dim=HIDDEN_SIZE,
             num_heads=MSA_HEADS,
-            add_bias_kv=True
+            bias=False,
+            add_bias_kv=False
         )
 
         self.layer_norm_2 = torch.nn.LayerNorm(
@@ -136,7 +153,8 @@ class ModelVisionTransformer(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.encode_positional = torch.nn.Embedding(
+        # torch.nn.Embedding
+        self.encode_positional = PositionalEncoding(
             num_embeddings=int((IMAGE_SIZE/PATCH_SIZE)**2) + 1, # For class token extra embedding
             embedding_dim=HIDDEN_SIZE
         )
