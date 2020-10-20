@@ -19,6 +19,9 @@ IMAGE_SIZE = 28
 OUTPUT_CLASSES = 10
 DEVICE = 'cpu'
 
+IS_AUTO_ENCODER_HACK = False # for better gradient flow learn something to predict on other seq steps
+IS_MEAN_FEATURES_HACK = True # for better gradient flow use all outputs
+
 if torch.cuda.is_available():
     DEVICE = 'cuda'
     #torch.cuda.device_count()
@@ -61,7 +64,7 @@ dataloader_test = torch.utils.data.DataLoader(
     shuffle=False
 )
 
-class Model(torch.nn.Module):
+class ModelClassic(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = torchvision.models.densenet121(pretrained=True).features
@@ -102,7 +105,8 @@ class ModelVisionTransformer(torch.nn.Module):
 
         self.msa_1 = torch.nn.MultiheadAttention(
             embed_dim=HIDDEN_SIZE,
-            num_heads=MSA_HEADS
+            num_heads=MSA_HEADS,
+            add_bias_kv=True
         )
 
         self.layer_norm_2 = torch.nn.LayerNorm(
@@ -121,7 +125,8 @@ class ModelVisionTransformer(torch.nn.Module):
 
         self.msa_3 = torch.nn.MultiheadAttention(
             embed_dim=HIDDEN_SIZE,
-            num_heads=MSA_HEADS
+            num_heads=MSA_HEADS,
+            add_bias_kv=True
         )
 
         self.layer_norm_4 = torch.nn.LayerNorm(
@@ -207,13 +212,17 @@ class ModelVisionTransformer(torch.nn.Module):
 
         z_5 = self.layer_norm_5.forward(z_4_mlp_skip)
 
-        #z_5_class_token = z_5[:, 0] # drop all pixel encodings, care only about the class token
+        z_5_class_token = z_5[:, 0] # drop all pixel encodings, care only about the class token
 
-        z_5_class_token = torch.mean(z_5, dim=1)
+        if IS_MEAN_FEATURES_HACK:
+            z_5_class_token = torch.mean(z_5, dim=1)
+
         y_prim = self.mlp_5_head.forward(z_5_class_token)
 
         y_prim_softmax = torch.nn.functional.softmax(y_prim, dim=1)
 
+        if IS_AUTO_ENCODER_HACK:
+            return y_prim_softmax, z_5[:, 1:], x_projected
         return y_prim_softmax
 
 
@@ -235,6 +244,11 @@ for mode in ['train', 'test']:
     metrics[f'{mode}_losses'] = []
     metrics[f'{mode}_acc'] = []
 
+# for AE map to random order to encaurage attention to work
+if IS_AUTO_ENCODER_HACK:
+    random_patch_order = torch.LongTensor(np.random.permutation(int((IMAGE_SIZE/PATCH_SIZE)**2)))
+    random_patch_order = random_patch_order.to(DEVICE)
+
 for epoch in range(1, EPOCHS):
     for data_loader in [dataloader_train, dataloader_test]:
         losses = []
@@ -250,14 +264,21 @@ for epoch in range(1, EPOCHS):
 
             x = x.to(DEVICE)
             y = y.to(DEVICE)
-            y_prim = model.forward(x)
+            if IS_AUTO_ENCODER_HACK:
+                y_prim, y_prim_pathces, y_patches = model.forward(x)
+            else:
+                y_prim = model.forward(x)
             loss = torch.mean(-y*torch.log(y_prim)) # .value .grad +=  .grad_fn
+
+            if IS_AUTO_ENCODER_HACK:
+                loss += 1e-2 * torch.mean((y_prim_pathces[:, random_patch_order] - y_patches) ** 2)
 
             y_prim_idxes = torch.argmax(y_prim.to('cpu'), dim=1)
             acc = torch.mean((y_idxes == y_prim_idxes) * 1.0)
 
             accs.append(acc)
             losses.append(loss.to('cpu').item()) # y_prim.data.numpy()
+
 
             if data_loader == dataloader_train:
                 loss.backward()
